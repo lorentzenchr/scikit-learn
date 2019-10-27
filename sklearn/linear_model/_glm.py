@@ -1045,6 +1045,123 @@ def _irls_solver(coef, X, y, weights, P2, fit_intercept, family, link,
     return coef, n_iter
 
 
+def _irls_svd_solver(coef, X, y, weights, P2, fit_intercept, family, link,
+                     max_iter, tol):
+    """Solve GLM with L2 penalty by IRLS algorithm.
+
+    We use a SVD decompoisition, see:
+    Wood, SN 2011, 'Fast stable restricted maximum likelihood and marginal
+    likelihood estimation of semiparametric generalized linear models',
+    Journal of the Royal Statistical Society,
+    Series B (Statistical Methodology), vol. 73, no. 1, pp. 3-36.
+    https://doi.org/10.1111/j.1467-9868.2010.00749.x
+
+    Note: If X is sparse, P2 must also be sparse.
+    """
+    # Solve Newton-Raphson, see _irls_solver
+    # One Newton step corresponds to solving the normal equations
+    # (X' W X + P2) w = X' W z
+    # Note: So far, no sparse!
+    #
+    # 1. Cholesky decomposition of P2 = E' E
+    n_samples, n_features = X.shape
+    if P2.ndim == 1:
+        if fit_intercept:
+            E = np.diag(np.concatenate(([0], np.sqrt(P2))), k=0)
+        else:
+            E = np.diag(np.sqrt(P2), k=0)
+    else:
+        if fit_intercept:
+            E = linalg.cholesky(np.block([[0, np.zeros(n_features)],
+                                          [np.zeros(n_features), P2]]),
+                                lower=False, check_finite=False)
+        else:
+            E = linalg.cholesky(P2, lower=False, check_finite=False)
+
+    # 2. SVD decomposition of (X)
+    #                         (E) = U s V'
+    #   O = diag(W, 1)
+    #   (V s U') O (U s V') = X' W X + P2
+    if fit_intercept:
+        U, s, Vh = linalg.svd(np.vstack((np.hstack((np.ones((n_samples, 1)),
+                                                    X)),
+                              E)),
+                              full_matrices=False, compute_uv=True,
+                              overwrite_a=False, check_finite=False)
+    else:
+        U, s, Vh = linalg.svd(np.vstack((X, E)),
+                              full_matrices=False, compute_uv=True,
+                              overwrite_a=False,
+                              check_finite=False)
+
+    # s is ordered non-decresing
+    # projection matrix for very small eigenvalues
+    Ps = (s > 1e-15)  # binary array
+    # pseudo inverse of s
+    s_inv = np.zeros_like(s)
+    s_inv[Ps] = 1/s[Ps]
+    # We need only first n_samples rows of U, call it Un in comments
+    # Also, we only need Un * diag(Ps)
+    U = U[:n_samples, :] * Ps  # sampe as @ np.diag(Ps)
+
+    eta = _safe_lin_pred(X, coef)
+    mu = link.inverse(eta)
+    # D = h'(eta)
+    hp = link.inverse_derivative(eta)
+    V = family.variance(mu, phi=1, weights=weights)
+
+    converged = False
+    n_iter = 0
+    while n_iter < max_iter:
+        n_iter += 1
+        # coef_old not used so far.
+        # coef_old = coef
+        # working weights W, in principle a diagonal matrix
+        # therefore here just as 1d array
+        W = hp**2 / V
+        # working observations
+        z = eta + (y - mu) / hp
+        # solve Ut O Ut t = b for t
+        # then coef = V * s^(-1) t
+        # Note: Ut = U Ps and Ut O Ut = Un (W-1) Un + 1
+        A = (U.transpose() * (W - 1)) @ U + np.eye(n_features+fit_intercept)
+        b = U.transpose() @ (W * z)
+        t = linalg.solve(A, b, sym_pos=True, check_finite=False)
+        coef = Vh.transpose() @ (s_inv * t)
+        # updated linear predictor
+        # do it here for updated values for tolerance
+        eta = _safe_lin_pred(X, coef)
+        mu = link.inverse(eta)
+        hp = link.inverse_derivative(eta)
+        V = family.variance(mu, phi=1, weights=weights)
+
+        # which tolerace? |coef - coef_old| or gradient?
+        # use gradient for compliance with newton-cg and lbfgs
+        # gradient = -X' D (y-mu)/V(mu) + l2 P2 w
+        temp = hp * (y - mu) / V
+        if sparse.issparse(X):
+            gradient = -(X.transpose() @ temp)
+        else:
+            gradient = -(X.T @ temp)
+        idx = 1 if fit_intercept else 0  # offset if coef[0] is intercept
+        if P2.ndim == 1:
+            gradient += P2 * coef[idx:]
+        else:
+            gradient += P2 @ coef[idx:]
+        if fit_intercept:
+            gradient = np.concatenate(([-temp.sum()], gradient))
+        if (np.max(np.abs(gradient)) <= tol):
+            converged = True
+            break
+
+    if not converged:
+        warnings.warn("irls_svd failed to converge. Increase the number "
+                      "of iterations (currently {0})"
+                      .format(max_iter), ConvergenceWarning)
+
+    return coef, n_iter
+
+
 def _cd_cycle(d, X, coef, score, fisher, P1, P2, n_cycles, inner_tol,
               max_inner_iter=1000, selection='cyclic',
               random_state=None, diag_fisher=False):
@@ -1498,6 +1615,8 @@ class GeneralizedLinearRegressor(BaseEstimator, RegressorMixin):
             It is the standard algorithm for GLMs. It cannot deal with
             L1 penalties.
 
+        'irls_svd'
+
         'lbfgs'
             Calls scipy's L-BFGS-B optimizer. It cannot deal with L1 penalties.
 
@@ -1757,7 +1876,8 @@ class GeneralizedLinearRegressor(BaseEstimator, RegressorMixin):
         if not isinstance(self.fit_intercept, bool):
             raise ValueError("The argument fit_intercept must be bool;"
                              " got {0}".format(self.fit_intercept))
-        if self.solver not in ['auto', 'irls', 'lbfgs', 'newton-cg', 'cd']:
+        if self.solver not in ['auto', 'irls', 'irls_svd', 'lbfgs',
+                               'newton-cg', 'cd']:
             raise ValueError("GeneralizedLinearRegressor supports only solvers"
                              " 'auto', 'irls', 'lbfgs', 'newton-cg' and 'cd';"
                              " got {0}".format(self.solver))
@@ -2058,6 +2178,12 @@ class GeneralizedLinearRegressor(BaseEstimator, RegressorMixin):
                 _irls_solver(coef=coef, X=X, y=y, weights=weights, P2=P2,
                              fit_intercept=self.fit_intercept, family=family,
                              link=link, max_iter=self.max_iter, tol=self.tol)
+        elif solver == 'irls_svd':
+            coef, self.n_iter_ = \
+                _irls_svd_solver(coef=coef, X=X, y=y, weights=weights, P2=P2,
+                                 fit_intercept=self.fit_intercept,
+                                 family=family, link=link,
+                                 max_iter=self.max_iter, tol=self.tol)
 
         # 4.2 L-BFGS ##########################################################
         elif solver == 'lbfgs':
