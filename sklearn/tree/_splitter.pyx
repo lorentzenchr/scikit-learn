@@ -365,6 +365,7 @@ cdef class BestSplitter(BaseDenseSplitter):
                 sort(Xf + start, samples + start, end - start)
 
                 if Xf[end - 1] <= Xf[start] + FEATURE_THRESHOLD:
+                    # TODO: print positions
                     features[f_j], features[n_total_constants] = features[n_total_constants], features[f_j]
 
                     n_found_constants += 1
@@ -438,6 +439,13 @@ cdef class BestSplitter(BaseDenseSplitter):
                                              &best.impurity_right)
             best.improvement = self.criterion.impurity_improvement(
                 impurity, best.impurity_left, best.impurity_right)
+            with gil:
+                if 93 <= best.pos <= 98:#np.abs(best.improvement - 7.713012593305286e-07) <= 1e-10:
+                    print(f"BestSplitter.node_split(..):\n"
+                          f"  (start, end) = ({start}, {end})\n"
+                          f"  best.improvement = {best.improvement}, impurity = {impurity}, "
+                          f"  best.impurity_left = {best.impurity_left}, "
+                          f"  best.impurity_right = {best.impurity_right}, best.pos = {best.pos}\n")
 
         # Respect invariant for constant features: the original order of
         # element in features[:n_known_constants] must be preserved for sibling

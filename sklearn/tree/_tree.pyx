@@ -241,6 +241,15 @@ cdef class DepthFirstTreeBuilder(TreeBuilder):
                 # Store value for all nodes, to facilitate tree/model
                 # inspection and interpretation
                 splitter.node_value(tree.value + node_id * tree.value_stride)
+                with gil:
+                    nvalue = (tree.value + node_id * tree.value_stride)[0]
+                    if nvalue <= 0.:
+                        print(f"DepthFirstTreeBuilder.build(..):")
+                        print(f"  impurity = {impurity}, improvement = {split.improvement} "
+                              f"  node_value = {nvalue}\n"
+                              f"  node_id = {node_id}, feature = {split.feature}, threshold = {split.threshold}"
+                              f"  splitter.criterion.(start, pos, end) = ({splitter.criterion.start}, {splitter.criterion.pos}, {splitter.criterion.end})\n")
+
 
                 if not is_leaf:
                     # Push right child on stack
@@ -655,7 +664,7 @@ cdef class Tree:
 
         if (node_ndarray.dtype != NODE_DTYPE):
             # possible mismatch of big/little endian due to serialization
-            # on a different architecture. Try swapping the byte order.  
+            # on a different architecture. Try swapping the byte order.
             node_ndarray = node_ndarray.byteswap().newbyteorder()
             if (node_ndarray.dtype != NODE_DTYPE):
                 raise ValueError('Did not recognise loaded array dytpe')

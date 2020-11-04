@@ -875,6 +875,14 @@ cdef class RegressionCriterion(Criterion):
         for k in range(self.n_outputs):
             dest[k] = self.sum_total[k] / self.weighted_n_node_samples
 
+        with gil:
+            if 93 <= self.start <= 98 and 93 <= self.end <= 98:
+                print(f"Poisson.node_value(..):")
+                for p in range(self.start, self.end):
+                    i = self.samples[p]
+                    print(f"  p = {p} i = {i} has y = {self.y[i, 0]}")
+                print(f"  (start, pos, end) = ({self.start}, {self.pos}, {self.end}), node_value = {dest[0]}\n")
+
 
 cdef class MSE(RegressionCriterion):
     """Mean squared error impurity criterion.
@@ -1395,7 +1403,24 @@ cdef class Poisson(RegressionCriterion):
                 proxy_impurity_left -= y_mean_left * log(y_mean_left)
                 proxy_impurity_right -= y_mean_right * log(y_mean_right)
 
+        with gil:
+            if 93 <= self.start <= 98 and 93 <= self.end <= 98:
+                print(f"Poisson.proxy_impurity_improvement(..):"
+                      f"  y_mean_left = {y_mean_left}, y_mean_right = {y_mean_right}"
+                      f"  improvement = {- proxy_impurity_left - proxy_impurity_right}"
+                      f"  (start, pos, end) = {self.start, self.pos, self.end}\n"
+                      )
+
         return - proxy_impurity_left - proxy_impurity_right
+        # cdef const DOUBLE_t[:, ::1] y = self.y
+        # cdef SIZE_t start = self.start
+        # cdef SIZE_t pos = self.pos
+        # cdef SIZE_t end = self.end
+        # proxy_impurity_left = self.poisson_loss(start, pos, self.sum_left,
+        #                                         self.weighted_n_left)
+        # proxy_impurity_right = self.poisson_loss(pos, end, self.sum_right,
+        #                                          self.weighted_n_right)
+        # return - proxy_impurity_left - proxy_impurity_right
 
     cdef void children_impurity(self, double* impurity_left,
                                 double* impurity_right) nogil:
@@ -1420,6 +1445,14 @@ cdef class Poisson(RegressionCriterion):
         impurity_right[0] = self.poisson_loss(pos, end, self.sum_right,
                                               self.weighted_n_right)
 
+        with gil:
+            if 93 <= self.start <= 98 and 93 <= self.end <= 98:
+                print(f"Poisson.children_impurity(..):")
+                for p in range(start, end):
+                    i = self.samples[p]
+                    print(f"  p = {p} i = {i} has y = {y[i, 0]}")
+                print(f"  impurity_left = {impurity_left[0]}, impurity_right = {impurity_right[0]}\n")
+
     cdef inline DOUBLE_t poisson_loss(self,
                                       SIZE_t start,
                                       SIZE_t end,
@@ -1436,10 +1469,10 @@ cdef class Poisson(RegressionCriterion):
         cdef SIZE_t n_outputs = self.n_outputs
 
         for k in range(n_outputs):
-            y_mean = y_sum[k] / weight_sum
-
-            if y_mean <= 0:
+            if y_sum[k] <= 0:
                 return INFINITY
+
+            y_mean = y_sum[k] / weight_sum
 
             for p in range(start, end):
                 i = self.samples[p]
@@ -1448,4 +1481,11 @@ cdef class Poisson(RegressionCriterion):
                     w = weight[i]
 
                 poisson_loss += w * xlogy(y[i, k], y[i, k] / y_mean)
+
+        with gil:
+            if 93 <= start <= 98 and 93 <= end <= 98:
+                print(f"Poisson.poisson_loss(..):"
+                      f"  y_mean = {y_mean}, p in range({start}, {end})"
+                      f"  loss = {poisson_loss / (weight_sum * n_outputs)}\n"
+                      )
         return poisson_loss / (weight_sum * n_outputs)
