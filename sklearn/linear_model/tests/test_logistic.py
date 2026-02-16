@@ -2469,11 +2469,18 @@ def test_passing_params_without_enabling_metadata_routing():
             lr_cv.score(X, y, **params)
 
 
-def test_newton_cholesky_fallback_to_lbfgs():
+@pytest.mark.parametrize("n_classes", [2, 3])
+def test_newton_cholesky_fallback_to_lbfgs(n_classes):
     # Wide data matrix should lead to a rank-deficient Hessian matrix
     # hence make the Newton-Cholesky solver raise a warning and fallback to
     # lbfgs.
-    X, y = make_classification(n_samples=10, n_features=20, random_state=42)
+    X, y = make_classification(
+        n_samples=10,
+        n_features=20,
+        n_informative=10,
+        n_classes=n_classes,
+        random_state=42,
+    )
     C = 1e30  # very high C to nearly disable regularization
 
     # Check that LBFGS can converge without any warning on this problem.
